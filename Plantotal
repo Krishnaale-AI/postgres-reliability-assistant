@@ -1,0 +1,2492 @@
+Absolutely. Below is a **complete beginner-to-working-project implementation**. I’ll keep the first version practical and small enough that you can actually build it, then add the RAG/pgvector part.
+
+The project will be:
+
+> **AI PostgreSQL DBA Health Assistant for AWS RDS PostgreSQL 15.16**
+
+It will collect PostgreSQL health information, send the findings to **Amazon Bedrock**, and display an AI-generated DBA analysis in **Streamlit**. Then we’ll add **pgvector + historical incidents** so it becomes a small RAG application.
+
+AWS currently documents PostgreSQL 15.16 as a supported RDS version and lists `pgvector` among the supported extensions for PostgreSQL 15. ([AWS Documentation][1])
+
+---
+
+# 1. What you will build
+
+The final application will look approximately like this:
+
+```text
+                    AWS
+                     │
+          ┌──────────▼──────────┐
+          │     Amazon RDS      │
+          │  PostgreSQL 15.16   │
+          │                     │
+          │ pg_stat_activity    │
+          │ pg_stat_database     │
+          │ pg_stat_statements   │
+          │ pg_stat_user_tables  │
+          │ pgvector             │
+          └──────────┬──────────┘
+                     │
+                     │ SQL
+                     ▼
+          ┌──────────────────────┐
+          │   Python Backend     │
+          │                      │
+          │ psycopg              │
+          │ Health Collector     │
+          └──────────┬───────────┘
+                     │
+          ┌──────────▼───────────┐
+          │    AI Analyzer       │
+          │                      │
+          │ Amazon Bedrock        │
+          │ Amazon Nova Lite      │
+          └──────────┬───────────┘
+                     │
+                     ▼
+          ┌──────────────────────┐
+          │     Streamlit        │
+          │      Dashboard       │
+          │                      │
+          │ 🟢 Healthy           │
+          │ 🟠 Warning           │
+          │ 🔴 Critical          │
+          │                      │
+          │ AI Analysis          │
+          │ Root Cause           │
+          │ DBA Actions          │
+          └──────────────────────┘
+
+                    +
+                    
+          ┌──────────────────────┐
+          │      pgvector        │
+          │                      │
+          │ Historical incidents │
+          │ Embeddings            │
+          │ Similar incidents     │
+          └──────────────────────┘
+```
+
+---
+
+# 2. What you need
+
+You need:
+
+### AWS
+
+* AWS account
+* RDS
+* Bedrock
+* IAM
+* Secrets Manager
+* VPC/Security Group
+
+### Your Windows machine
+
+You already work with Python/VS Code, so we'll use:
+
+```text
+Python 3.11 or 3.12
+VS Code
+psql
+Git
+```
+
+I recommend **Python 3.11 or 3.12** for this project rather than Python 3.14 because some AI/data packages can lag behind the newest Python release.
+
+---
+
+# 3. Project phases
+
+We'll build this in 8 phases:
+
+```text
+PHASE 1   AWS RDS PostgreSQL
+PHASE 2   PostgreSQL configuration
+PHASE 3   pgvector
+PHASE 4   Python project
+PHASE 5   DBA monitoring
+PHASE 6   Amazon Bedrock
+PHASE 7   Streamlit dashboard
+PHASE 8   RAG + pgvector
+```
+
+---
+
+# PHASE 1 — Create AWS RDS PostgreSQL 15.16
+
+## Step 1 — Open RDS
+
+Open the AWS console:
+
+[Amazon RDS Console](https://console.aws.amazon.com/rds/?utm_source=chatgpt.com)
+
+Choose your region.
+
+For learning, I recommend:
+
+```text
+us-east-1
+```
+
+or the AWS region closest to your environment.
+
+---
+
+# Step 2 — Create database
+
+Go to:
+
+```text
+RDS
+ ↓
+Databases
+ ↓
+Create database
+```
+
+AWS's documented RDS workflow is to choose the PostgreSQL engine, configure the instance, networking/security, and then create the database. ([AWS Documentation][2])
+
+Select:
+
+```text
+Creation method:
+Standard create
+
+Engine:
+PostgreSQL
+
+Version:
+PostgreSQL 15.16
+```
+
+If 15.16 is not available in your selected region/account, select another supported 15.x version and change the project version accordingly.
+
+---
+
+# Step 3 — DB configuration
+
+For the learning project:
+
+```text
+DB instance identifier:
+
+ai-postgres-dba
+```
+
+Credentials:
+
+```text
+Master username:
+
+postgres
+```
+
+For the password, preferably select:
+
+```text
+Manage master credentials in AWS Secrets Manager
+```
+
+AWS supports RDS-managed master credentials through Secrets Manager, which avoids putting the database password directly into application code. ([AWS Documentation][3])
+
+---
+
+# Step 4 — Instance class
+
+For learning:
+
+```text
+db.t3.micro
+```
+
+or the smallest class currently available under your account/free-tier eligibility.
+
+Don't use a large production instance for this learning project.
+
+---
+
+# Step 5 — Storage
+
+Choose:
+
+```text
+Storage type:
+General Purpose SSD
+
+Allocated storage:
+20 GiB
+```
+
+For a learning project this is enough.
+
+---
+
+# Step 6 — Connectivity
+
+Choose:
+
+```text
+VPC:
+Default VPC
+
+Public access:
+Yes
+```
+
+**Important:** Public access is acceptable for a temporary learning lab, but do not copy this architecture into production.
+
+Security Group:
+
+```text
+Create new
+
+Name:
+ai-postgres-dba-sg
+```
+
+Port:
+
+```text
+5432
+```
+
+AWS recommends restricting inbound database access to trusted IP addresses or security groups rather than exposing the database broadly. ([AWS Documentation][4])
+
+So set:
+
+```text
+Type: PostgreSQL
+Port: 5432
+Source: My IP
+```
+
+Do **NOT** use:
+
+```text
+0.0.0.0/0
+```
+
+---
+
+# Step 7 — Additional configuration
+
+Database name:
+
+```text
+dba_ai
+```
+
+Backup:
+
+```text
+Backup retention:
+1 day
+```
+
+For learning, this is sufficient.
+
+Monitoring can initially remain basic.
+
+---
+
+# Step 8 — Create database
+
+Click:
+
+```text
+Create database
+```
+
+Wait until:
+
+```text
+Status = Available
+```
+
+---
+
+# 4. Get RDS endpoint
+
+Open:
+
+```text
+RDS
+ → Databases
+ → ai-postgres-dba
+```
+
+Under:
+
+```text
+Connectivity & security
+```
+
+you'll find:
+
+```text
+Endpoint
+Port
+```
+
+AWS documents the endpoint and port as the primary connection information for connecting to RDS PostgreSQL. ([AWS Documentation][5])
+
+It will look like:
+
+```text
+ai-postgres-dba.xxxxxxxxx.us-east-1.rds.amazonaws.com
+```
+
+Port:
+
+```text
+5432
+```
+
+Save this endpoint.
+
+---
+
+# PHASE 2 — Connect to PostgreSQL
+
+Open PowerShell.
+
+Check:
+
+```powershell
+psql --version
+```
+
+You should get something like:
+
+```text
+psql (PostgreSQL) 15.x
+```
+
+Connect:
+
+```powershell
+psql -h YOUR_RDS_ENDPOINT -p 5432 -U postgres -d dba_ai
+```
+
+Example:
+
+```powershell
+psql -h ai-postgres-dba.xxxxx.us-east-1.rds.amazonaws.com -p 5432 -U postgres -d dba_ai
+```
+
+Enter your password.
+
+You should see:
+
+```text
+dba_ai=>
+```
+
+---
+
+# 5. Verify PostgreSQL
+
+Run:
+
+```sql
+SELECT version();
+```
+
+Expected:
+
+```text
+PostgreSQL 15.16 ...
+```
+
+Then:
+
+```sql
+SELECT current_database();
+```
+
+Expected:
+
+```text
+dba_ai
+```
+
+---
+
+# PHASE 3 — Configure PostgreSQL
+
+Now we're going to enable the monitoring capabilities.
+
+---
+
+# 6. Check pg_stat_statements
+
+Run:
+
+```sql
+SHOW shared_preload_libraries;
+```
+
+RDS PostgreSQL normally includes `pg_stat_statements` in its default configuration, and AWS recommends using it for query analysis. ([AWS Documentation][6])
+
+Check:
+
+```sql
+SELECT *
+FROM pg_available_extensions
+WHERE name = 'pg_stat_statements';
+```
+
+Then:
+
+```sql
+CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+```
+
+Verify:
+
+```sql
+SELECT extname, extversion
+FROM pg_extension
+WHERE extname = 'pg_stat_statements';
+```
+
+---
+
+# 7. Enable useful PostgreSQL monitoring
+
+Run:
+
+```sql
+CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+```
+
+Then check:
+
+```sql
+SHOW track_activity_query_size;
+```
+
+And:
+
+```sql
+SHOW track_counts;
+```
+
+---
+
+# PHASE 4 — Install pgvector
+
+This is an important part.
+
+AWS currently lists `pgvector` as a supported extension for RDS PostgreSQL 15, with version support depending on the exact PostgreSQL minor release. ([AWS Documentation][1])
+
+First:
+
+```sql
+SELECT *
+FROM pg_available_extensions
+WHERE name = 'vector';
+```
+
+You should get:
+
+```text
+ name   | default_version | installed_version
+--------+-----------------+------------------
+ vector | ...
+```
+
+Now:
+
+```sql
+CREATE EXTENSION IF NOT EXISTS vector;
+```
+
+Verify:
+
+```sql
+SELECT extname, extversion
+FROM pg_extension
+WHERE extname = 'vector';
+```
+
+Expected:
+
+```text
+ extname | extversion
+---------+-----------
+ vector  | 0.x.x
+```
+
+### If you get this error
+
+```text
+ERROR:
+extension "vector" is not available
+```
+
+Do **not** try to install pgvector manually on the RDS operating system.
+
+Run:
+
+```sql
+SELECT *
+FROM pg_available_extensions
+WHERE name = 'vector';
+```
+
+If no row is returned, first check your RDS PostgreSQL minor version and supported extensions for that version. RDS manages the extension availability. ([AWS Documentation][1])
+
+---
+
+# PHASE 5 — Create project database objects
+
+Create a schema:
+
+```sql
+CREATE SCHEMA IF NOT EXISTS dba_ai;
+```
+
+---
+
+# 8. Create health history table
+
+```sql
+CREATE TABLE dba_ai.health_history
+(
+    id BIGSERIAL PRIMARY KEY,
+    collected_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    database_name TEXT,
+    connections INTEGER,
+    max_connections INTEGER,
+
+    database_size_bytes BIGINT,
+
+    long_running_queries INTEGER,
+    blocking_sessions INTEGER,
+
+    xid_age BIGINT,
+
+    replication_lag_seconds DOUBLE PRECISION,
+
+    status TEXT
+);
+```
+
+---
+
+# 9. Create incident knowledge base
+
+This is for RAG.
+
+```sql
+CREATE TABLE dba_ai.incidents
+(
+    id BIGSERIAL PRIMARY KEY,
+
+    title TEXT NOT NULL,
+
+    problem TEXT NOT NULL,
+
+    root_cause TEXT,
+
+    resolution TEXT,
+
+    prevention TEXT,
+
+    embedding VECTOR(1536),
+
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+```
+
+### Important
+
+The embedding dimension depends on the embedding model you use.
+
+For the first implementation, we will **not depend on a specific embedding model**. We'll initially create the table and later adjust the dimension if necessary based on the selected Bedrock embedding model.
+
+For example, if your embedding model produces 1024 dimensions:
+
+```sql
+ALTER TABLE dba_ai.incidents
+ALTER COLUMN embedding TYPE VECTOR(1024);
+```
+
+---
+
+# 10. Insert sample incidents
+
+```sql
+INSERT INTO dba_ai.incidents
+(
+    title,
+    problem,
+    root_cause,
+    resolution,
+    prevention
+)
+VALUES
+(
+    'High database storage growth',
+    'Database size increased significantly within one day',
+    'Large batch load generated substantial table and index growth',
+    'Identified the table responsible for growth and reviewed the batch process',
+    'Implement daily database and table growth monitoring'
+);
+```
+
+Second:
+
+```sql
+INSERT INTO dba_ai.incidents
+(
+    title,
+    problem,
+    root_cause,
+    resolution,
+    prevention
+)
+VALUES
+(
+    'Replication lag',
+    'Replica replay lag increased significantly',
+    'Large transaction generated high WAL volume',
+    'Investigated WAL generation and transaction activity',
+    'Monitor WAL generation and replication replay lag'
+);
+```
+
+Third:
+
+```sql
+INSERT INTO dba_ai.incidents
+(
+    title,
+    problem,
+    root_cause,
+    resolution,
+    prevention
+)
+VALUES
+(
+    'Blocking session',
+    'Queries were waiting for a database lock',
+    'Long-running transaction held a lock',
+    'Identified the blocking backend and coordinated transaction completion',
+    'Monitor long-running transactions and blocking sessions'
+);
+```
+
+---
+
+# 11. Create vector index later
+
+Once embeddings have been inserted, we can create:
+
+```sql
+CREATE INDEX incidents_embedding_idx
+ON dba_ai.incidents
+USING hnsw (embedding vector_cosine_ops);
+```
+
+We'll come back to this in the RAG section.
+
+---
+
+# PHASE 6 — Create Python project
+
+On Windows:
+
+```powershell
+mkdir ai-postgres-dba
+cd ai-postgres-dba
+```
+
+Create virtual environment:
+
+```powershell
+py -3.12 -m venv .venv
+```
+
+Activate:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+```
+
+You should see:
+
+```text
+(.venv) PS C:\...\ai-postgres-dba>
+```
+
+---
+
+# 12. Install packages
+
+Create:
+
+```text
+requirements.txt
+```
+
+Put:
+
+```text
+boto3
+botocore
+psycopg[binary]
+python-dotenv
+streamlit
+pandas
+```
+
+Install:
+
+```powershell
+pip install -r requirements.txt
+```
+
+---
+
+# 13. Verify installation
+
+Run:
+
+```powershell
+python -c "import boto3, psycopg, streamlit, pandas; print('All packages OK')"
+```
+
+Expected:
+
+```text
+All packages OK
+```
+
+---
+
+# 14. Project structure
+
+Create:
+
+```text
+ai-postgres-dba/
+│
+├── .venv/
+│
+├── .env
+├── .gitignore
+├── requirements.txt
+├── app.py
+│
+├── config.py
+│
+├── db/
+│   ├── __init__.py
+│   ├── connection.py
+│   └── health.py
+│
+├── ai/
+│   ├── __init__.py
+│   ├── bedrock.py
+│   └── prompts.py
+│
+└── sql/
+    └── setup.sql
+```
+
+---
+
+# 15. Create `.gitignore`
+
+```text
+.venv/
+.env
+__pycache__/
+*.pyc
+```
+
+Very important:
+
+**Never commit `.env` to Git.**
+
+---
+
+# 16. Create `.env`
+
+For the first local version:
+
+```text
+AWS_REGION=us-east-1
+
+RDS_HOST=YOUR_RDS_ENDPOINT
+RDS_PORT=5432
+RDS_DATABASE=dba_ai
+RDS_USER=postgres
+RDS_PASSWORD=YOUR_PASSWORD
+
+BEDROCK_MODEL_ID=amazon.nova-lite-v1:0
+```
+
+However, for a better architecture, we'll replace the RDS password with **AWS Secrets Manager** later.
+
+Amazon Bedrock's `Converse` API provides a consistent interface across supported models, which is convenient for this project. ([AWS Documentation][7])
+
+---
+
+# 17. AWS credentials
+
+Do **not** put:
+
+```text
+AWS_ACCESS_KEY_ID
+AWS_SECRET_ACCESS_KEY
+```
+
+inside the application code.
+
+For local development, configure AWS CLI:
+
+```powershell
+aws configure
+```
+
+Enter:
+
+```text
+AWS Access Key ID
+AWS Secret Access Key
+Default region:
+us-east-1
+```
+
+Then test:
+
+```powershell
+aws sts get-caller-identity
+```
+
+You should receive your AWS account identity.
+
+For production, use an IAM role instead of long-lived access keys.
+
+---
+
+# PHASE 7 — IAM permissions
+
+Create an IAM user/role with permission to call Bedrock.
+
+For the learning project, you need permission to invoke the model.
+
+Conceptually:
+
+```json
+{
+    "Effect": "Allow",
+    "Action": [
+        "bedrock:InvokeModel",
+        "bedrock:Converse"
+    ],
+    "Resource": "*"
+}
+```
+
+For production, restrict permissions to the specific resources/models you actually need.
+
+---
+
+# 18. Enable Bedrock model access
+
+Open:
+
+[Amazon Bedrock Console](https://console.aws.amazon.com/bedrock/?utm_source=chatgpt.com)
+
+Select your region.
+
+Go to the model access/model catalog area available in your region and ensure the model you intend to use is available.
+
+For this project we'll use:
+
+```text
+Amazon Nova Lite
+```
+
+Model ID:
+
+```text
+amazon.nova-lite-v1:0
+```
+
+AWS's current Bedrock examples show `amazon.nova-lite-v1:0` and the Bedrock Runtime client for invoking Nova models. ([AWS Documentation][8])
+
+---
+
+# 19. Create `config.py`
+
+```python
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
+
+RDS_HOST = os.getenv("RDS_HOST")
+RDS_PORT = int(os.getenv("RDS_PORT", "5432"))
+RDS_DATABASE = os.getenv("RDS_DATABASE")
+RDS_USER = os.getenv("RDS_USER")
+RDS_PASSWORD = os.getenv("RDS_PASSWORD")
+
+BEDROCK_MODEL_ID = os.getenv(
+    "BEDROCK_MODEL_ID",
+    "amazon.nova-lite-v1:0"
+)
+```
+
+---
+
+# 20. Create `db/connection.py`
+
+```python
+import psycopg
+
+from config import (
+    RDS_HOST,
+    RDS_PORT,
+    RDS_DATABASE,
+    RDS_USER,
+    RDS_PASSWORD
+)
+
+
+def get_connection():
+    return psycopg.connect(
+        host=RDS_HOST,
+        port=RDS_PORT,
+        dbname=RDS_DATABASE,
+        user=RDS_USER,
+        password=RDS_PASSWORD,
+        sslmode="require"
+    )
+```
+
+The important part is:
+
+```python
+sslmode="require"
+```
+
+Your application should use TLS when connecting to RDS.
+
+---
+
+# 21. Create database health collector
+
+Create:
+
+```text
+db/health.py
+```
+
+Use:
+
+```python
+from .connection import get_connection
+
+
+def get_database_info():
+
+    query = """
+    SELECT
+        current_database(),
+        version(),
+        numbackends
+    FROM pg_stat_database
+    WHERE datname = current_database();
+    """
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query)
+            row = cur.fetchone()
+
+    return {
+        "database": row[0],
+        "version": row[1],
+        "connections": row[2]
+    }
+
+
+def get_database_size():
+
+    query = """
+    SELECT pg_database_size(current_database());
+    """
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query)
+            row = cur.fetchone()
+
+    return row[0]
+
+
+def get_long_running_queries():
+
+    query = """
+    SELECT count(*)
+    FROM pg_stat_activity
+    WHERE state <> 'idle'
+      AND query_start IS NOT NULL
+      AND now() - query_start > interval '5 minutes';
+    """
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query)
+            return cur.fetchone()[0]
+
+
+def get_blocking_sessions():
+
+    query = """
+    SELECT count(*)
+    FROM pg_stat_activity
+    WHERE cardinality(pg_blocking_pids(pid)) > 0;
+    """
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query)
+            return cur.fetchone()[0]
+
+
+def get_xid_age():
+
+    query = """
+    SELECT max(age(datfrozenxid))
+    FROM pg_database;
+    """
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query)
+            return cur.fetchone()[0]
+```
+
+---
+
+# 22. Create a combined health function
+
+Add to `db/health.py`:
+
+```python
+def collect_health():
+
+    info = get_database_info()
+
+    size = get_database_size()
+
+    long_queries = get_long_running_queries()
+
+    blocking = get_blocking_sessions()
+
+    xid_age = get_xid_age()
+
+    return {
+        "database": info["database"],
+        "postgresql_version": info["version"],
+        "connections": info["connections"],
+        "database_size_bytes": size,
+        "long_running_queries": long_queries,
+        "blocking_sessions": blocking,
+        "xid_age": xid_age
+    }
+```
+
+---
+
+# PHASE 8 — Amazon Bedrock
+
+Create:
+
+```text
+ai/bedrock.py
+```
+
+Code:
+
+```python
+import boto3
+
+from config import AWS_REGION, BEDROCK_MODEL_ID
+
+
+client = boto3.client(
+    "bedrock-runtime",
+    region_name=AWS_REGION
+)
+
+
+def analyze_database(metrics):
+
+    prompt = f"""
+You are a senior PostgreSQL DBA.
+
+Analyze the following AWS RDS PostgreSQL health information.
+
+Database:
+{metrics["database"]}
+
+PostgreSQL:
+{metrics["postgresql_version"]}
+
+Connections:
+{metrics["connections"]}
+
+Database size:
+{metrics["database_size_bytes"]} bytes
+
+Long-running queries:
+{metrics["long_running_queries"]}
+
+Blocking sessions:
+{metrics["blocking_sessions"]}
+
+XID age:
+{metrics["xid_age"]}
+
+Provide:
+
+1. Overall health
+2. Critical issues
+3. Warning issues
+4. Possible root causes
+5. Business/application impact
+6. SQL commands for investigation
+7. Recommended DBA actions
+8. Preventive monitoring
+
+Do not recommend destructive actions automatically.
+Do not invent metrics that are not provided.
+Clearly distinguish facts from hypotheses.
+"""
+
+    response = client.converse(
+        modelId=BEDROCK_MODEL_ID,
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "text": prompt
+                    }
+                ]
+            }
+        ]
+    )
+
+    return response["output"]["message"]["content"][0]["text"]
+```
+
+This uses Bedrock Runtime's `Converse` API, which AWS documents as a common interface for models that support messages. ([AWS Documentation][7])
+
+---
+
+# 23. Test Bedrock separately
+
+Create:
+
+```text
+test_bedrock.py
+```
+
+```python
+from ai.bedrock import analyze_database
+
+metrics = {
+    "database": "dba_ai",
+    "postgresql_version": "PostgreSQL 15.16",
+    "connections": 25,
+    "database_size_bytes": 5000000000,
+    "long_running_queries": 2,
+    "blocking_sessions": 1,
+    "xid_age": 1000000
+}
+
+result = analyze_database(metrics)
+
+print(result)
+```
+
+Run:
+
+```powershell
+python test_bedrock.py
+```
+
+You should receive an AI-generated analysis.
+
+---
+
+# PHASE 9 — Streamlit dashboard
+
+Now create:
+
+```text
+app.py
+```
+
+Use:
+
+```python
+import streamlit as st
+import pandas as pd
+
+from db.health import collect_health
+from ai.bedrock import analyze_database
+
+
+st.set_page_config(
+    page_title="AI PostgreSQL DBA",
+    layout="wide"
+)
+
+st.title("🤖 AI PostgreSQL DBA Health Assistant")
+
+st.write(
+    "AWS RDS PostgreSQL health monitoring and AI-assisted troubleshooting"
+)
+
+
+if st.button("🔍 Run DBA Health Check"):
+
+    with st.spinner("Collecting PostgreSQL metrics..."):
+
+        metrics = collect_health()
+
+    st.subheader("Database Information")
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        st.metric(
+            "Connections",
+            metrics["connections"]
+        )
+
+    with col2:
+        st.metric(
+            "Long Queries",
+            metrics["long_running_queries"]
+        )
+
+    with col3:
+        st.metric(
+            "Blocking Sessions",
+            metrics["blocking_sessions"]
+        )
+
+    st.subheader("Database Metrics")
+
+    data = {
+        "Metric": [
+            "Database",
+            "PostgreSQL",
+            "Database Size",
+            "XID Age"
+        ],
+        "Value": [
+            metrics["database"],
+            metrics["postgresql_version"],
+            f'{metrics["database_size_bytes"] / (1024**3):.2f} GB',
+            metrics["xid_age"]
+        ]
+    }
+
+    st.dataframe(
+        pd.DataFrame(data),
+        use_container_width=True
+    )
+
+    st.subheader("🤖 AI DBA Analysis")
+
+    with st.spinner("Analyzing database health with Amazon Bedrock..."):
+
+        analysis = analyze_database(metrics)
+
+    st.markdown(analysis)
+```
+
+---
+
+# 24. Run Streamlit
+
+From the project folder:
+
+```powershell
+streamlit run app.py
+```
+
+You'll get something similar to:
+
+```text
+Local URL:
+http://localhost:8501
+```
+
+Open it.
+
+---
+
+# 25. Your first working version is now complete
+
+You now have:
+
+```text
+AWS RDS
+   ↓
+PostgreSQL 15.16
+   ↓
+Python
+   ↓
+PostgreSQL health queries
+   ↓
+Amazon Bedrock
+   ↓
+AI analysis
+   ↓
+Streamlit
+```
+
+---
+
+# PHASE 10 — Add more DBA metrics
+
+Now let's make this genuinely useful for a PostgreSQL DBA.
+
+Add:
+
+```text
+CPU
+Connections
+Long queries
+Blocking
+Database size
+Table size
+Dead tuples
+Autovacuum
+XID age
+Replication
+WAL
+Temporary files
+Cache hit ratio
+```
+
+---
+
+# 26. Top tables
+
+Add:
+
+```python
+def get_top_tables():
+
+    query = """
+    SELECT
+        schemaname,
+        relname,
+        pg_total_relation_size(relid) AS size_bytes
+    FROM pg_catalog.pg_statio_user_tables
+    ORDER BY pg_total_relation_size(relid) DESC
+    LIMIT 10;
+    """
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query)
+            return cur.fetchall()
+```
+
+---
+
+# 27. Dead tuples
+
+```python
+def get_dead_tuples():
+
+    query = """
+    SELECT
+        schemaname,
+        relname,
+        n_live_tup,
+        n_dead_tup,
+        last_autovacuum,
+        last_vacuum
+    FROM pg_stat_user_tables
+    ORDER BY n_dead_tup DESC
+    LIMIT 10;
+    """
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query)
+            return cur.fetchall()
+```
+
+---
+
+# 28. Cache hit ratio
+
+```python
+def get_cache_hit_ratio():
+
+    query = """
+    SELECT
+        datname,
+        round(
+            100.0 * blks_hit /
+            NULLIF(blks_hit + blks_read, 0),
+            2
+        )
+    FROM pg_stat_database
+    WHERE datname = current_database();
+    """
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query)
+            return cur.fetchone()[1]
+```
+
+---
+
+# 29. Long-running query details
+
+Instead of only counting them:
+
+```python
+def get_long_query_details():
+
+    query = """
+    SELECT
+        pid,
+        usename,
+        state,
+        now() - query_start AS duration,
+        wait_event_type,
+        wait_event,
+        left(query, 500)
+    FROM pg_stat_activity
+    WHERE state <> 'idle'
+      AND query_start IS NOT NULL
+    ORDER BY query_start
+    LIMIT 20;
+    """
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query)
+            return cur.fetchall()
+```
+
+---
+
+# 30. Blocking query details
+
+```python
+def get_blocking_details():
+
+    query = """
+    SELECT
+        blocked.pid AS blocked_pid,
+        blocking.pid AS blocking_pid,
+        blocked.usename AS blocked_user,
+        blocking.usename AS blocking_user,
+        now() - blocked.query_start AS blocked_duration,
+        left(blocked.query, 300) AS blocked_query,
+        left(blocking.query, 300) AS blocking_query
+    FROM pg_stat_activity blocked
+    JOIN pg_stat_activity blocking
+      ON blocking.pid = ANY(pg_blocking_pids(blocked.pid));
+    """
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query)
+            return cur.fetchall()
+```
+
+---
+
+# PHASE 11 — Add CloudWatch
+
+This is where the project becomes more AWS-oriented.
+
+Your architecture becomes:
+
+```text
+RDS
+ │
+ ├── PostgreSQL metrics
+ │
+ └── CloudWatch
+       │
+       ├── CPU
+       ├── FreeStorageSpace
+       ├── DatabaseConnections
+       ├── ReadIOPS
+       ├── WriteIOPS
+       └── FreeableMemory
+```
+
+Your Python application can eventually retrieve CloudWatch metrics using `boto3`.
+
+For example:
+
+```python
+import boto3
+
+cloudwatch = boto3.client(
+    "cloudwatch",
+    region_name="us-east-1"
+)
+```
+
+Then query metrics for:
+
+```text
+CPUUtilization
+DatabaseConnections
+FreeStorageSpace
+ReadIOPS
+WriteIOPS
+FreeableMemory
+```
+
+This is particularly useful for your DBA use case because PostgreSQL statistics alone don't tell the whole RDS infrastructure story.
+
+---
+
+# PHASE 12 — Store historical health data
+
+This is important.
+
+Instead of collecting data and throwing it away, save it.
+
+Create:
+
+```sql
+CREATE TABLE dba_ai.health_history
+(
+    id BIGSERIAL PRIMARY KEY,
+    collected_at TIMESTAMPTZ DEFAULT now(),
+
+    database_name TEXT,
+
+    connections INTEGER,
+
+    database_size_bytes BIGINT,
+
+    long_running_queries INTEGER,
+
+    blocking_sessions INTEGER,
+
+    xid_age BIGINT,
+
+    cache_hit_ratio NUMERIC,
+
+    status TEXT
+);
+```
+
+Then Python:
+
+```python
+def save_health(metrics):
+
+    query = """
+    INSERT INTO dba_ai.health_history
+    (
+        database_name,
+        connections,
+        database_size_bytes,
+        long_running_queries,
+        blocking_sessions,
+        xid_age
+    )
+    VALUES
+    (
+        %s,
+        %s,
+        %s,
+        %s,
+        %s,
+        %s
+    );
+    """
+
+    with get_connection() as conn:
+
+        with conn.cursor() as cur:
+
+            cur.execute(
+                query,
+                (
+                    metrics["database"],
+                    metrics["connections"],
+                    metrics["database_size_bytes"],
+                    metrics["long_running_queries"],
+                    metrics["blocking_sessions"],
+                    metrics["xid_age"]
+                )
+            )
+
+        conn.commit()
+```
+
+Now you can build:
+
+```text
+Database growth graph
+Connections graph
+XID age graph
+Blocking sessions graph
+```
+
+---
+
+# PHASE 13 — Build database growth graph
+
+In Streamlit:
+
+```python
+history_query = """
+SELECT
+    collected_at,
+    database_size_bytes
+FROM dba_ai.health_history
+ORDER BY collected_at;
+"""
+```
+
+Convert to DataFrame:
+
+```python
+df = pd.DataFrame(
+    history,
+    columns=[
+        "time",
+        "database_size"
+    ]
+)
+```
+
+Then:
+
+```python
+df["database_size_gb"] = (
+    df["database_size"] / (1024 ** 3)
+)
+```
+
+Display:
+
+```python
+st.line_chart(
+    df.set_index("time")["database_size_gb"]
+)
+```
+
+Now your dashboard can show:
+
+```text
+DATABASE GROWTH
+
+GB
+500 |                       *
+450 |                  *
+400 |             *
+350 |        *
+300 |    *
+    +----------------------------
+       Mon Tue Wed Thu Fri Sat
+```
+
+---
+
+# PHASE 14 — RAG with pgvector
+
+Now we reach the **AI/RAG** portion.
+
+The architecture becomes:
+
+```text
+User asks:
+
+"Why did storage suddenly increase?"
+
+                │
+                ▼
+         Current DB metrics
+                │
+                ▼
+          Create embedding
+                │
+                ▼
+             pgvector
+                │
+                ▼
+       Similar historical cases
+                │
+                ▼
+          Amazon Bedrock
+                │
+                ▼
+       DBA explanation
+```
+
+---
+
+# 31. Embeddings
+
+We need an embedding model.
+
+The exact embedding dimension depends on the model selected in your AWS region.
+
+For example, suppose your selected embedding model returns:
+
+```text
+1024 dimensions
+```
+
+Then:
+
+```sql
+ALTER TABLE dba_ai.incidents
+ALTER COLUMN embedding TYPE VECTOR(1024);
+```
+
+---
+
+# 32. Create embedding function
+
+We'll use Bedrock Runtime.
+
+Conceptually:
+
+```python
+def create_embedding(text):
+    ...
+```
+
+The exact request structure depends on the embedding model you choose, so don't hard-code a dimension/model combination until you confirm the model available in your Bedrock region.
+
+---
+
+# 33. Store embedding
+
+Suppose:
+
+```python
+embedding = [
+    0.012,
+    -0.034,
+    ...
+]
+```
+
+Insert it:
+
+```python
+query = """
+UPDATE dba_ai.incidents
+SET embedding = %s
+WHERE id = %s;
+"""
+```
+
+With psycopg/pgvector adapters, you can serialize the vector appropriately; for the first version, you can also pass the vector representation as a PostgreSQL vector literal.
+
+---
+
+# 34. Similarity search
+
+Once vectors exist:
+
+```sql
+SELECT
+    id,
+    title,
+    problem,
+    root_cause,
+    resolution,
+    prevention,
+    embedding <=> %s::vector AS distance
+FROM dba_ai.incidents
+ORDER BY embedding <=> %s::vector
+LIMIT 3;
+```
+
+The smaller the cosine distance, the more similar the incident.
+
+---
+
+# 35. RAG prompt
+
+Suppose the user asks:
+
+```text
+Why did my RDS database storage increase suddenly?
+```
+
+Your Python application retrieves:
+
+```text
+CURRENT METRICS
+
+Database:
+450 GB
+
+Yesterday:
+421 GB
+
+Increase:
+29 GB
+```
+
+Then pgvector finds:
+
+```text
+Historical incident:
+
+Title:
+High database storage growth
+
+Root cause:
+Large batch process
+
+Resolution:
+Investigated table growth and batch workload
+
+Prevention:
+Daily table-growth monitoring
+```
+
+Then send both to Bedrock:
+
+```text
+CURRENT DATABASE INFORMATION:
+
+Database size:
+450 GB
+
+Previous size:
+421 GB
+
+Growth:
+29 GB
+
+HISTORICAL SIMILAR INCIDENT:
+
+Problem:
+Database storage increased significantly.
+
+Root cause:
+Large batch load generated substantial table growth.
+
+Resolution:
+Identified the table responsible for growth.
+
+Prevention:
+Daily table-growth monitoring.
+
+Analyze the current incident.
+Explain:
+1. Most likely cause
+2. Evidence
+3. Investigation SQL
+4. Impact
+5. Recommended action
+6. Prevention
+```
+
+This is a proper **RAG-based DBA assistant**.
+
+---
+
+# PHASE 15 — DBA dashboard design
+
+Your final Streamlit application should have these sections.
+
+```text
+=====================================================
+       🤖 AI POSTGRESQL DBA ASSISTANT
+=====================================================
+
+RDS:
+ai-postgres-dba
+
+PostgreSQL:
+15.16
+
+                    HEALTH SCORE
+
+                     🟢 87%
+
+-----------------------------------------------------
+
+DATABASE
+
+Connections          35 / 200       🟢
+Database Size        452 GB         🟠
+Cache Hit Ratio      99.2%          🟢
+XID Age              12M            🟢
+
+-----------------------------------------------------
+
+PERFORMANCE
+
+Long Queries         3              🟠
+Blocking Sessions    1              🔴
+Dead Tuples          High           🟠
+
+-----------------------------------------------------
+
+STORAGE TREND
+
+       📈 Database Growth
+
+500 GB |                         *
+450 GB |                    *
+400 GB |              *
+350 GB |        *
+      +----------------------------
+       Mon Tue Wed Thu Fri Sat
+
+-----------------------------------------------------
+
+REPLICATION
+
+Status               🟢 Healthy
+Replay Lag            2 sec
+
+-----------------------------------------------------
+
+🤖 AI DBA ANALYSIS
+
+CRITICAL:
+One blocking session detected.
+
+Possible Root Cause:
+A long-running transaction is holding
+a lock required by another session.
+
+Recommended Investigation:
+
+SELECT pid,
+       usename,
+       state,
+       xact_start,
+       query
+FROM pg_stat_activity
+ORDER BY xact_start;
+
+-----------------------------------------------------
+
+HISTORICAL SIMILAR INCIDENT
+
+Incident #23
+
+"Long running transaction caused blocking"
+
+Similarity:
+92%
+
+-----------------------------------------------------
+
+PREVENTION
+
+✓ Monitor blocking sessions
+✓ Monitor transaction age
+✓ Alert when transaction > 15 minutes
+✓ Review application connection handling
+
+=====================================================
+```
+
+---
+
+# PHASE 16 — Add health scoring
+
+You can create a simple rule-based score before asking AI.
+
+For example:
+
+```python
+def calculate_health_score(metrics):
+
+    score = 100
+
+    if metrics["long_running_queries"] > 5:
+        score -= 15
+
+    if metrics["blocking_sessions"] > 0:
+        score -= 20
+
+    if metrics["xid_age"] > 1_000_000_000:
+        score -= 30
+
+    return max(score, 0)
+```
+
+Then:
+
+```python
+score = calculate_health_score(metrics)
+
+st.metric(
+    "DB Health Score",
+    f"{score}%"
+)
+```
+
+AI should **explain the score**, but your deterministic monitoring logic should still calculate the basic health state.
+
+This is safer than asking an LLM to decide everything.
+
+---
+
+# PHASE 17 — Add severity
+
+Use:
+
+```python
+if score >= 90:
+    status = "HEALTHY"
+
+elif score >= 70:
+    status = "WARNING"
+
+else:
+    status = "CRITICAL"
+```
+
+Dashboard:
+
+```text
+90-100   🟢 HEALTHY
+70-89    🟠 WARNING
+0-69     🔴 CRITICAL
+```
+
+---
+
+# PHASE 18 — Use Secrets Manager properly
+
+The first version used:
+
+```text
+RDS_PASSWORD=...
+```
+
+in `.env`.
+
+That's okay for a local prototype, but don't keep that architecture.
+
+AWS recommends Secrets Manager for storing database credentials instead of hardcoding credentials in applications. ([AWS Documentation][9])
+
+Create a secret:
+
+```text
+AWS Secrets Manager
+        │
+        ▼
+postgres-dba-ai-secret
+```
+
+The secret should contain:
+
+```json
+{
+    "username": "postgres",
+    "password": "YOUR_PASSWORD",
+    "engine": "postgres",
+    "host": "YOUR_RDS_ENDPOINT",
+    "port": 5432,
+    "dbname": "dba_ai"
+}
+```
+
+---
+
+# 36. Python Secrets Manager code
+
+```python
+import json
+import boto3
+
+
+def get_db_secret():
+
+    client = boto3.client(
+        "secretsmanager",
+        region_name="us-east-1"
+    )
+
+    response = client.get_secret_value(
+        SecretId="postgres-dba-ai-secret"
+    )
+
+    return json.loads(
+        response["SecretString"]
+    )
+```
+
+Then:
+
+```python
+secret = get_db_secret()
+
+username = secret["username"]
+password = secret["password"]
+host = secret["host"]
+```
+
+Now your application doesn't need the database password in `.env`.
+
+---
+
+# PHASE 19 — Recommended final architecture
+
+After implementing everything:
+
+```text
+                         AWS
+                          │
+       ┌──────────────────┼──────────────────┐
+       │                  │                  │
+       ▼                  ▼                  ▼
+     RDS             CloudWatch         Secrets Manager
+       │                  │                  │
+       │                  │                  │
+       └──────────┬───────┴──────────────────┘
+                  │
+                  ▼
+            Python Backend
+                  │
+       ┌──────────┼──────────┐
+       │          │          │
+       ▼          ▼          ▼
+    Health      RAG       Historical
+    Checks    Retrieval    Metrics
+       │          │          │
+       └──────────┼──────────┘
+                  ▼
+             PostgreSQL
+               pgvector
+                  │
+                  ▼
+            Amazon Bedrock
+                  │
+                  ▼
+             AI Analysis
+                  │
+                  ▼
+             Streamlit
+                  │
+                  ▼
+             DBA Dashboard
+```
+
+---
+
+# 20. What you should implement first
+
+**Don't implement the entire thing in one day.**
+
+Follow this order:
+
+### Day 1
+
+```text
+☐ Create RDS
+☐ Connect using psql
+☐ Verify PostgreSQL 15.16
+☐ Create dba_ai database
+```
+
+### Day 2
+
+```text
+☐ pg_stat_statements
+☐ pgvector
+☐ Create monitoring tables
+☐ Insert test incidents
+```
+
+### Day 3
+
+```text
+☐ Create Python virtual environment
+☐ Install packages
+☐ Connect Python → RDS
+☐ Run health queries
+```
+
+### Day 4
+
+```text
+☐ Create Bedrock access
+☐ Test Amazon Nova Lite
+☐ Send PostgreSQL metrics to Bedrock
+☐ Receive AI analysis
+```
+
+### Day 5
+
+```text
+☐ Build Streamlit
+☐ Display metrics
+☐ Display health score
+☐ Display AI analysis
+```
+
+### Day 6
+
+```text
+☐ Store historical metrics
+☐ Create growth charts
+☐ Add long-query history
+☐ Add blocking history
+```
+
+### Day 7
+
+```text
+☐ Embeddings
+☐ pgvector similarity search
+☐ Historical incident retrieval
+☐ RAG prompt
+```
+
+---
+
+# 21. Final project capabilities
+
+Once completed, your project will be able to answer questions such as:
+
+### Question
+
+> Why is my RDS database growing rapidly?
+
+AI:
+
+```text
+Database size increased from 421 GB to 452 GB.
+
+Increase:
+31 GB
+
+Most likely areas to investigate:
+
+1. Large table growth
+2. Index growth
+3. Bulk load activity
+4. Temporary files
+5. WAL generation
+
+Recommended SQL:
+
+SELECT
+    schemaname,
+    relname,
+    pg_size_pretty(
+        pg_total_relation_size(relid)
+    )
+FROM pg_stat_user_tables
+ORDER BY pg_total_relation_size(relid) DESC;
+```
+
+---
+
+### Question
+
+> Why is my application slow?
+
+AI:
+
+```text
+Potential issues detected:
+
+🔴 Blocking session
+🟠 4 long-running queries
+🟠 High I/O
+
+Recommended investigation:
+
+1. Check blocking sessions.
+2. Review pg_stat_statements.
+3. Check RDS CloudWatch I/O.
+4. Identify expensive SQL.
+5. Review execution plans.
+```
+
+---
+
+### Question
+
+> Why is replication lag increasing?
+
+AI:
+
+```text
+Potential causes:
+
+1. High WAL generation
+2. Long-running transactions
+3. Replica I/O pressure
+4. Replica CPU pressure
+
+Recommended DBA investigation:
+
+- pg_stat_replication
+- pg_stat_activity
+- CloudWatch
+- WAL generation
+- Long-running transactions
+```
+
+---
+
+# 22. One important DBA safety rule
+
+**Do not allow the LLM to automatically execute SQL against your RDS database.**
+
+Initially make the application:
+
+```text
+AI
+ ↓
+Recommendation
+ ↓
+DBA reviews
+ ↓
+DBA executes
+```
+
+Not:
+
+```text
+AI
+ ↓
+DELETE / TERMINATE / VACUUM FULL / ALTER
+ ↓
+Production
+```
+
+For example, the AI may recommend:
+
+```sql
+SELECT pg_terminate_backend(12345);
+```
+
+Your application should **never automatically execute that**.
+
+The first version should be **read-only**.
+
+Give the monitoring user only the permissions required for monitoring. This also follows the least-privilege approach recommended in AWS guidance. ([AWS Documentation][10])
+
+---
+
+# 23. Your final GitHub project
+
+I'd structure your repository like this:
+
+```text
+ai-postgres-dba/
+│
+├── README.md
+│
+├── requirements.txt
+├── .gitignore
+│
+├── app.py
+├── config.py
+│
+├── db/
+│   ├── connection.py
+│   ├── health.py
+│   ├── queries.py
+│   └── history.py
+│
+├── ai/
+│   ├── bedrock.py
+│   ├── embeddings.py
+│   ├── rag.py
+│   └── prompts.py
+│
+├── monitoring/
+│   ├── storage.py
+│   ├── locks.py
+│   ├── vacuum.py
+│   ├── xid.py
+│   └── replication.py
+│
+├── sql/
+│   ├── setup.sql
+│   ├── health_queries.sql
+│   └── rag.sql
+│
+└── docs/
+    ├── architecture.md
+    ├── setup.md
+    └── troubleshooting.md
+```
+
+---
+
+# 24. What you will learn from this single project
+
+This one project gives you practical experience with:
+
+| Area               | What you'll learn          |
+| ------------------ | -------------------------- |
+| PostgreSQL         | Monitoring/system views    |
+| RDS                | AWS-managed PostgreSQL     |
+| AWS networking     | VPC + Security Groups      |
+| IAM                | Permissions                |
+| Secrets Manager    | Secure credentials         |
+| CloudWatch         | RDS monitoring             |
+| Python             | DB automation              |
+| psycopg            | PostgreSQL connectivity    |
+| Bedrock            | Generative AI              |
+| Prompt engineering | DBA prompts                |
+| pgvector           | Vector storage             |
+| RAG                | Historical incident search |
+| Streamlit          | AI dashboard               |
+| Git                | Project management         |
+| DBA                | Root-cause investigation   |
+
+This is therefore much more valuable for your **PostgreSQL DBA → AI-enabled DBA** progression than a generic chatbot project.
+
+### Recommended next step
+
+I would build this with you **file-by-file**, rather than giving you another huge theoretical document. Start with **Phase 1: RDS creation**, then after your RDS is available, we can build the exact `setup.sql`, Python files, Bedrock code, pgvector/RAG code, and Streamlit dashboard and test each piece before moving to the next.
+
+[1]: https://docs.aws.amazon.com/AmazonRDS/latest/PostgreSQLReleaseNotes/postgresql-extensions.html?utm_source=chatgpt.com "Extension versions for Amazon RDS for PostgreSQL - Amazon Relational Database Service"
+[2]: https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_GettingStarted.CreatingConnecting.PostgreSQL.html?utm_source=chatgpt.com "Creating and connecting to a PostgreSQL DB instance - Amazon Relational Database Service"
+[3]: https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/rds-secrets-manager.html?utm_source=chatgpt.com "Password management with Amazon RDS and AWS Secrets Manager - Amazon Relational Database Service"
+[4]: https://docs.aws.amazon.com/AmazonRDS/latest/gettingstartedguide/security-groups.html?utm_source=chatgpt.com "Determining who can connect to your Amazon RDS DB instance - Amazon Relational Database Service"
+[5]: https://docs.aws.amazon.com/AmazonRDS/latest/gettingstartedguide/connecting-console.html?utm_source=chatgpt.com "Using the Amazon RDS console to retrieve connection information - Amazon Relational Database Service"
+[6]: https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Appendix.PostgreSQL.CommonDBATasks.html?utm_source=chatgpt.com "Common DBA tasks for Amazon RDS for PostgreSQL - Amazon Relational Database Service"
+[7]: https://docs.aws.amazon.com/boto3/latest/reference/services/bedrock-runtime/client/converse.html?utm_source=chatgpt.com "converse - Boto3 1.43.84 documentation"
+[8]: https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-runtime_example_bedrock-runtime_DocumentUnderstanding_AmazonNova_section.html?utm_source=chatgpt.com "Send and process a document with Amazon Nova on Amazon Bedrock - Amazon Bedrock"
+[9]: https://docs.aws.amazon.com/secretsmanager/latest/userguide/hardcoded-db-creds.html?utm_source=chatgpt.com "Move hardcoded database credentials to AWS Secrets Manager - AWS Secrets Manager"
+[10]: https://docs.aws.amazon.com/secretsmanager/latest/userguide/tutorials_rotation-single.html?utm_source=chatgpt.com "Set up single user rotation for AWS Secrets Manager - AWS Secrets Manager"
