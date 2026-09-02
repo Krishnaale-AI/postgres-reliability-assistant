@@ -1,142 +1,181 @@
-# 🛡️ AI PostgreSQL DBA Health Assistant for AWS RDS PostgreSQL 15.16
+# 🛡️ PostgreSQL Reliability Assistant (AI-Powered DBA)
 
-[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15.16-336791?style=for-the-badge&logo=postgresql&logoColor=white)](https://www.postgresql.org/)
-[![AWS RDS](https://img.shields.io/badge/AWS_RDS-Managed_DB-232F3E?style=for-the-badge&logo=amazon-aws&logoColor=white)](https://aws.amazon.com/rds/)
-[![Amazon Bedrock](https://img.shields.io/badge/Amazon_Bedrock-Nova_Lite_&_Titan_V2-FF9900?style=for-the-badge&logo=amazon-aws&logoColor=white)](https://aws.amazon.com/bedrock/)
-[![pgvector](https://img.shields.io/badge/pgvector-Vector_Search-0064a5?style=for-the-badge&logo=postgresql&logoColor=white)](https://github.com/pgvector/pgvector)
-[![Streamlit](https://img.shields.io/badge/Streamlit-Interactive_UI-FF4B4B?style=for-the-badge&logo=streamlit&logoColor=white)](https://streamlit.io/)
-[![Python](https://img.shields.io/badge/Python-3.11_|_3.12-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
+> **Enterprise-grade Database Reliability Engineering platform for AWS RDS PostgreSQL 15.16 powered by Amazon Bedrock (Nova Lite), pgvector RAG, and Streamlit.**
 
-An enterprise-grade, AI-powered Database Reliability Engineering platform combining **AWS RDS PostgreSQL 15.16** system telemetry, **Amazon Bedrock (Amazon Nova Lite)** generative reasoning, and **pgvector Retrieval-Augmented Generation (RAG)** to provide real-time database health diagnostics, lock contention trees, storage bloat analysis, and historical incident post-mortem matching.
-
----
-
-## 📑 Table of Contents
-1. [Project Overview & Problem Statement](#1-project-overview--problem-statement)
-2. [End-to-End System Architecture](#2-end-to-end-system-architecture)
-3. [Key Features & Capabilities](#3-key-features--capabilities)
-4. [Tech Stack & AWS Services](#4-tech-stack--aws-services)
-5. [Database Architecture & pgvector Schema](#5-database-architecture--pgvector-schema)
-6. [AI & RAG Pipeline Breakdown](#6-ai--rag-pipeline-breakdown)
-7. [Security & Credential Management](#7-security--credential-management)
-8. [Repository Structure](#8-repository-structure)
-9. [Step-by-Step Installation & Setup](#9-step-by-step-installation--setup)
-10. [Streamlit Dashboard Walkthrough](#10-streamlit-dashboard-walkthrough)
-11. [DBA Safety Guardrails & Operational Runbook](#11-dba-safety-guardrails--operational-runbook)
-12. [Troubleshooting Common Issues](#12-troubleshooting-common-issues)
-13. [Key Learnings & Skills Demonstrated](#13-key-learnings--skills-demonstrated)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15.16-336791?style=flat-square&logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![AWS RDS](https://img.shields.io/badge/AWS_RDS-Managed_DB-232F3E?style=flat-square&logo=amazon-aws&logoColor=white)](https://aws.amazon.com/rds/)
+[![Amazon Bedrock](https://img.shields.io/badge/Amazon_Bedrock-Nova_Lite_&_Titan_V2-FF9900?style=flat-square&logo=amazon-aws&logoColor=white)](https://aws.amazon.com/bedrock/)
+[![pgvector](https://img.shields.io/badge/pgvector-Cosine_Search_(<=>)-0064a5?style=flat-square&logo=postgresql&logoColor=white)](https://github.com/pgvector/pgvector)
+[![Streamlit](https://img.shields.io/badge/Streamlit-UI_Dashboard-FF4B4B?style=flat-square&logo=streamlit&logoColor=white)](https://streamlit.io/)
+[![Python](https://img.shields.io/badge/Python-3.11_|_3.12-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
+[![License](https://img.shields.io/badge/License-MIT-green.svg?style=flat-square)](LICENSE)
 
 ---
 
-## 1. Project Overview & Problem Statement
+## 📌 Executive Summary
 
-### The Problem
-Traditional database monitoring tools (metrics graphs, static threshold alerts) alert DBAs *that* something is wrong (e.g., "CPU at 95%" or "Storage decreasing"), but they do not answer:
-- *Why* is the database behaving this way?
-- *Which* uncommitted transaction or query is holding locks?
-- *How* did the team resolve this exact failure scenario six months ago?
-- *What* exact, non-destructive SQL commands should the on-call engineer execute right now?
+Traditional database monitoring alerts you *when* an issue happens, but leaves the DBA to manually reconstruct query trees, inspect lock graphs, and search past incident tickets. 
 
-### The Solution
-The **AI PostgreSQL DBA Health Assistant** transforms standard PostgreSQL system catalogs (`pg_stat_activity`, `pg_stat_database`, `pg_stat_statements`, `pg_statio_user_tables`) into structured semantic payloads. It sends these metrics to **Amazon Bedrock (Amazon Nova Lite)** for instant root-cause analysis and matches current symptoms against historical incident post-mortems stored in **pgvector** using cosine similarity (`<=>`).
+The **PostgreSQL Reliability Assistant** bridges low-level PostgreSQL system catalogs with **Amazon Bedrock generative reasoning** and **pgvector historical incident retrieval (RAG)** to provide:
+1. **Instant Root-Cause Identification**: Traces lock contention to root blocking PIDs and uncommitted transactions (`idle in transaction`).
+2. **Predictive Reliability Scoring**: Mathematical health score (0–100) assessing memory pressure, connection pool saturation, table bloat, and transaction ID (XID) wraparound risk.
+3. **Retrieval-Augmented Guidance (RAG)**: Matches real-time symptoms against historical incident post-mortems using vector cosine similarity (`<=>`).
+4. **Safe, Read-Only DBA Runbooks**: Automatically generates non-destructive diagnostic SQL queries for safe human verification.
 
 ---
 
-## 2. End-to-End System Architecture
+## 🏗️ System Architecture
 
-```mermaid
-flowchart TD
-    subgraph AWS_Cloud ["AWS Cloud Infrastructure"]
-        subgraph RDS_Cluster ["Amazon RDS PostgreSQL 15.16"]
-            PGA["pg_stat_activity\n(Active Sessions & Locks)"]
-            PGD["pg_stat_database\n(Cache Hits & Commits)"]
-            PGS["pg_stat_statements\n(Top Query Latencies)"]
-            PGU["pg_stat_user_tables\n(Dead Tuples & Sizes)"]
-            PGV["pgvector (dba_ai.incidents)\n(Vector Knowledge Base)"]
-            HIS["dba_ai.health_history\n(Snapshot Time-Series)"]
-        end
-
-        subgraph Management ["AWS Management Services"]
-            CW["Amazon CloudWatch\n(CPU, IOPS, Memory, Storage)"]
-            SM["AWS Secrets Manager\n(Database Credentials)"]
-            Bedrock_Nova["Amazon Bedrock\n(Amazon Nova Lite v1)"]
-            Bedrock_Titan["Amazon Bedrock\n(Titan Text Embeddings v2)"]
-        end
-    end
-
-    subgraph Backend ["Python Core Backend Engine"]
-        Conn["db/connection.py\n(TLS & Secrets Manager)"]
-        Collector["db/health.py & monitoring/*\n(Storage, Locks, Vacuum, XID, Replication)"]
-        Scorer["Reliability Scoring Engine\n(Deterministic 0-100 Score)"]
-        RAGEngine["ai/rag.py\n(Cosine Distance Search <=>)"]
-        BedrockHandler["ai/bedrock.py\n(Bedrock Converse API)"]
-    end
-
-    subgraph UI ["Interactive Streamlit UI (app.py)"]
-        Gauge["Health Score Gauge & Severity Badge"]
-        Tab1["📊 Health Overview & 7-Day Trend"]
-        Tab2["⚡ Performance & Lock Contention Trees"]
-        Tab3["📈 Storage Bloat & Dead Tuples"]
-        Tab4["☁️ CloudWatch RDS Telemetry"]
-        Tab5["🤖 Bedrock AI DBA Executive Diagnosis"]
-        Tab6["🧠 pgvector RAG Incident Assistant"]
-        Tab7["🛡️ Safe DBA Operations Runbook"]
-    end
-
-    %% Data Flows
-    SM -.->|1. Fetch Credentials| Conn
-    Conn -->|2. Query Catalogs| PGA & PGD & PGS & PGU
-    PGA & PGD & PGS & PGU --> Collector
-    CW -->|3. Telemetry| Collector
-    Collector -->|4. Log Snapshot| HIS
-    Collector --> Scorer
-    Scorer --> Gauge
-    Collector --> BedrockHandler
-    Bedrock_Nova <-->|5. Structured Diagnosis| BedrockHandler
-    PGV <-->|6. Vector Similarity Search| RAGEngine
-    Bedrock_Titan <-->|7. Dense Embeddings| RAGEngine
-    BedrockHandler --> Tab5
-    RAGEngine --> Tab6
-    Collector --> Tab1 & Tab2 & Tab3 & Tab4
+```
+                                      AWS CLOUD
+ ┌──────────────────────────────────────────────────────────────────────────────────┐
+ │                                                                                  │
+ │   ┌────────────────────────┐   ┌────────────────────────┐   ┌─────────────────┐  │
+ │   │  AWS RDS PostgreSQL    │   │    Amazon Bedrock      │   │ AWS CloudWatch  │  │
+ │   │        (15.16)         │   │                        │   │                 │  │
+ │   │ ────────────────────── │   │ ────────────────────── │   │ ─────────────── │  │
+ │   │ • pg_stat_activity     │   │ • Amazon Nova Lite     │   │ • CPU & IOPS    │  │
+ │   │ • pg_stat_database     │   │ • Amazon Titan V2      │   │ • Free Storage  │  │
+ │   │ • pg_stat_statements   │   │   (1024-dim Embeddings)│   │ • Free Memory   │  │
+ │   │ • pg_stat_user_tables  │   └───────────▲────────────┘   └────────▲────────┘  │
+ │   │ • pgvector (HNSW)      │               │                         │           │
+ │   └───────────▲────────────┘               │                         │           │
+ └───────────────┼────────────────────────────┼─────────────────────────┼───────────┘
+                 │ (psycopg TLS / SSL)        │ (boto3 Converse API)    │ (boto3)
+                 ▼                            ▼                         ▼
+ ┌──────────────────────────────────────────────────────────────────────────────────┐
+ │                          PYTHON RELIABILITY ENGINE                               │
+ │                                                                                  │
+ │   ┌───────────────────────┐   ┌───────────────────────┐   ┌──────────────────┐   │
+ │   │  Telemetry Collector  │   │  Deterministic Scorer │   │   RAG Pipeline   │   │
+ │   │   (Locks, XID, Bloat) │──►│   (0-100 Health Index)│──►│ (pgvector Search)│   │
+ │   └───────────────────────┘   └───────────────────────┘   └──────────────────┘   │
+ └────────────────────────────────────────┬─────────────────────────────────────────┘
+                                          │
+                                          ▼
+ ┌──────────────────────────────────────────────────────────────────────────────────┐
+ │                            STREAMLIT WEB DASHBOARD                               │
+ │                                                                                  │
+ │   📊 Health Matrix    ⚡ Lock Trees    📈 Storage Bloat    🤖 Bedrock AI Report │
+ └──────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 3. Key Features & Capabilities
+## 🔄 Flow of Execution
 
-- **⚡ Real-Time Health & Performance Monitoring**: Queries active backends, connection pool saturation, long-running queries (>10s / >5m), buffer cache hit ratio, and autovacuum metrics.
-- **🔒 Active Lock Contention Tree**: Traces blocked queries back to root blocking PIDs and detects uncommitted transactions (`idle in transaction`).
-- **📦 Storage Bloat & Growth Analytics**: Analyzes top tables by total disk space, index overhead, TOAST tables, dead tuple accumulation, and 7-day growth trends.
-- **🕒 Transaction ID (XID) Wraparound Monitor**: Continuous calculation of distance to the 2.14B transaction freeze limit to prevent emergency database shutdowns.
-- **☁️ AWS RDS CloudWatch Telemetry**: Integration with CloudWatch metrics (`CPUUtilization`, `DatabaseConnections`, `FreeStorageSpace`, `ReadIOPS`, `WriteIOPS`, `FreeableMemory`).
-- **🤖 Amazon Bedrock Senior DBA Reasoning**: Uses the Bedrock `Converse` API (with Amazon Nova Lite / Claude 3) to generate non-destructive, safe diagnostic reports with copy-pasteable SQL commands.
-- **🧠 pgvector Incident RAG Assistant**: Semantic search on historical DBA post-mortems using cosine similarity (`<=>`) and Amazon Titan Text Embeddings V2 to propose tested solutions.
-- **🛡️ Strict DBA Safety Guardrails**: Designed with read-only analysis first—never executes destructive commands (DROP, TRUNCATE, TERMINATE) automatically.
-- **🔄 Built-in Demo / Offline Simulation Mode**: Toggle simulation mode to test the UI and features without active AWS connections.
+```mermaid
+sequenceDiagram
+    autonumber
+    actor DBA as DBA / On-Call SRE
+    participant UI as Streamlit Dashboard (app.py)
+    participant Engine as Reliability Engine (db/ & monitoring/)
+    participant RDS as AWS RDS PostgreSQL (15.16)
+    participant Bedrock as Amazon Bedrock (Nova Lite & Titan V2)
+
+    DBA->>UI: Click "Run Health Check" / Open Dashboard
+    UI->>Engine: Trigger Telemetry Collection
+    Engine->>RDS: Query pg_stat_activity, pg_stat_database, pg_statio_user_tables
+    RDS-->>Engine: Return Active Sessions, Locks, Bloat, XID Age
+    Engine->>Engine: Calculate Deterministic Reliability Score (0-100) & Severity Badge
+    Engine->>RDS: Record Health Snapshot into dba_ai.health_history
+
+    opt When AI Diagnosis Requested
+        UI->>Bedrock: Send Formatted Telemetry via Bedrock Converse API
+        Bedrock-->>UI: Return Senior DBA Root-Cause Report & Investigation SQL
+    end
+
+    opt When RAG Natural Language Inquiry Submitted
+        UI->>Bedrock: Generate 1024-dim Embedding via Titan Embeddings V2
+        Bedrock-->>Engine: Return Query Dense Vector
+        Engine->>RDS: Execute Cosine Similarity (<=>) on dba_ai.incidents with HNSW
+        RDS-->>Engine: Return Top-3 Similar Historical Incident Post-Mortems
+        Engine->>Bedrock: Synthesize Real-Time Telemetry + Historical Precedents
+        Bedrock-->>UI: Render Actionable Resolution Plan
+    end
+
+    UI-->>DBA: Display Interactive Gauges, Lock Graphs, and Safe SQL Runbooks
+```
 
 ---
 
-## 4. Tech Stack & AWS Services
+## 📂 Project Structure
 
-| Layer | Technology | Purpose |
-| :--- | :--- | :--- |
-| **Database** | AWS RDS PostgreSQL 15.16 | Managed database engine with `pg_stat_statements` |
-| **Vector Search** | `pgvector` extension | Native vector embedding storage & HNSW similarity search |
-| **Generative AI** | Amazon Bedrock (`amazon.nova-lite-v1:0`) | Senior DBA reasoning via Bedrock `Converse` API |
-| **Embeddings** | Amazon Titan Embeddings V2 (`amazon.titan-embed-text-v2:0`) | Generates 1024-dimensional normalized dense vectors |
-| **Infrastructure** | Amazon CloudWatch | Pulls RDS CPU, IOPS, and memory metrics via `boto3` |
-| **Security** | AWS Secrets Manager & IAM | Secure credential rotation and least-privilege access |
-| **Backend** | Python 3.11 / 3.12, `psycopg` (v3), `boto3` | Database querying, mathematical scoring, and orchestration |
-| **Frontend** | Streamlit, Plotly, Pandas | Interactive diagnostic web dashboard |
+```text
+postgres-reliability-assistant/
+│
+├── ⚙️ Configuration & Environment
+│   ├── .env.example              # Environment template (safe for git)
+│   ├── .env                      # Local credentials (EXCLUDED by .gitignore)
+│   ├── .gitignore                # Enterprise exclusion rules (secrets, venv, caches)
+│   ├── config.py                 # Central config loader & AWS Secrets Manager handler
+│   └── requirements.txt          # Pinned production dependencies
+│
+├── 🖥️ Application & CLI Scripts
+│   ├── app.py                    # Main Streamlit web dashboard (7 diagnostic tabs)
+│   ├── init_db.py                # Database setup script via Python (no psql required)
+│   ├── test_connection.py        # RDS connectivity & extension diagnostic tool
+│   └── test_bedrock.py           # Amazon Bedrock & pgvector diagnostic tool
+│
+├── 🗄️ Database Layer (db/)
+│   ├── __init__.py               # Layer exports
+│   ├── connection.py             # TLS psycopg connection factory with Secrets Manager
+│   ├── queries.py                # Centralized catalog SQL statements
+│   ├── health.py                 # Telemetry collector & reliability scoring engine (0-100)
+│   └── history.py                # Snapshot recorder & 7-day trend time-series generator
+│
+├── 🔍 Specialized Monitoring Modules (monitoring/)
+│   ├── __init__.py               # Layer exports
+│   ├── storage.py                # Table/Index bloat & TOAST inspection
+│   ├── locks.py                  # Recursive lock contention tree analyzer
+│   ├── vacuum.py                 # Autovacuum tracking & dead tuple ratio inspector
+│   ├── xid.py                    # Transaction ID (XID) wraparound risk calculator
+│   ├── replication.py            # Standby replica replay lag & WAL backlog monitor
+│   └── cloudwatch.py             # AWS CloudWatch RDS infrastructure telemetry (CPU/IOPS)
+│
+├── 🤖 Generative AI & Vector Search Engine (ai/)
+│   ├── __init__.py               # Layer exports
+│   ├── bedrock.py                # Bedrock Converse API client (Nova Lite / Claude)
+│   ├── embeddings.py             # Amazon Titan Text Embeddings V2 dense vector generator
+│   ├── prompts.py                # Senior DBA system prompts & non-destructive safety guardrails
+│   └── rag.py                    # pgvector cosine similarity search (<=>) & RAG pipeline
+│
+├── 📜 Database Schema & Catalogs (sql/)
+│   ├── setup.sql                 # DDL for schema, extensions, tables, seed incidents, HNSW
+│   ├── health_queries.sql        # Standalone manual diagnostic query catalog for DBAs
+│   └── rag.sql                   # pgvector vector operations & similarity testing
+│
+└── 📚 Documentation & Legal
+    ├── docs/
+    │   ├── architecture.md       # Detailed architectural breakdown & diagrams
+    │   ├── setup.md              # AWS RDS & Bedrock provisioning step-by-step
+    │   └── troubleshooting.md    # Common errors (DNS, Security Groups, IAM)
+    ├── README.md                 # Primary project documentation
+    └── LICENSE                   # MIT Open Source License
+```
 
 ---
 
-## 5. Database Architecture & pgvector Schema
+## 🎛️ Dashboard Features (7 Diagnostic Tabs)
 
-The project creates a dedicated schema `dba_ai` with two primary tables:
+| Tab | Feature | Description |
+| :---: | :--- | :--- |
+| **1** | **📊 Health Overview** | Dynamic Reliability Gauge (0–100), severity badge (`HEALTHY`, `WARNING`, `CRITICAL`), KPI metrics, and a 7-day database growth trend chart. |
+| **2** | **⚡ Performance & Locks** | Reconstructs recursive lock contention trees (showing root blocking PIDs and uncommitted queries), slow queries (>10s), and top SQL statements (`pg_stat_statements`). |
+| **3** | **📈 Storage & Bloat** | Top 10 largest tables by disk footprint, index overhead breakdown, dead tuple ratios, and autovacuum candidate tables. |
+| **4** | **☁️ CloudWatch RDS** | Real-time AWS CloudWatch telemetry (CPU %, Free Storage GB, IOPS, Memory) and production alarm recommendations. |
+| **5** | **🤖 Bedrock AI DBA** | One-click senior DBA diagnosis powered by Amazon Nova Lite: executive health summary, root causes, and safe copy-pasteable SQL. |
+| **6** | **🧠 pgvector RAG Assistant** | Natural language DBA question answering using vector similarity matching against historical incident post-mortems. |
+| **7** | **🛡️ Safe DBA Runbook** | Ready-to-use safe commands for graceful session cancellation (`pg_cancel_backend`), non-blocking re-indexing (`CONCURRENTLY`), and timeout parameters. |
+
+---
+
+## 📊 Database Schema & pgvector Setup
+
+The database schema is organized under the dedicated `dba_ai` namespace:
 
 ```sql
--- 1. Schema and Extensions
+-- 1. Enable Required Extensions
 CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
 CREATE EXTENSION IF NOT EXISTS vector;
 CREATE SCHEMA IF NOT EXISTS dba_ai;
@@ -153,11 +192,10 @@ CREATE TABLE IF NOT EXISTS dba_ai.health_history (
     blocking_sessions INTEGER NOT NULL DEFAULT 0,
     xid_age BIGINT NOT NULL DEFAULT 0,
     cache_hit_ratio NUMERIC(5, 2) DEFAULT 99.0,
-    replication_lag_seconds DOUBLE PRECISION DEFAULT 0.0,
     status TEXT NOT NULL DEFAULT 'HEALTHY'
 );
 
--- 3. Historical Incident Knowledge Base (pgvector)
+-- 3. Incident Knowledge Base for pgvector RAG
 CREATE TABLE IF NOT EXISTS dba_ai.incidents (
     id BIGSERIAL PRIMARY KEY,
     title TEXT NOT NULL,
@@ -165,7 +203,7 @@ CREATE TABLE IF NOT EXISTS dba_ai.incidents (
     root_cause TEXT NOT NULL,
     resolution TEXT NOT NULL,
     prevention TEXT NOT NULL,
-    embedding VECTOR(1024), -- 1024-dim dense vectors from Titan V2
+    embedding VECTOR(1024), -- 1024-dim dense vectors from Amazon Titan V2
     created_at TIMESTAMPTZ DEFAULT now()
 );
 
@@ -177,136 +215,33 @@ USING hnsw (embedding vector_cosine_ops);
 
 ---
 
-## 6. AI & RAG Pipeline Breakdown
+## 🚀 Quick Start (5-Minute Setup)
 
-```
-[User Problem / Query]
-       │
-       ▼
-[Amazon Titan Embeddings V2] ──► 1024-Dimensional Dense Vector
-       │
-       ▼
-[pgvector Cosine Search (<=>)] ──► Retrieves Top-3 Matched Incidents
-       │
-       ▼
-[Prompt Augmentation Engine] ──► Combines:
-                                  1. Live PostgreSQL Metrics
-                                  2. Matched Historical Root Causes
-                                  3. User Inquiry
-       │
-       ▼
-[Amazon Bedrock (Nova Lite)] ──► Executive DBA Action Plan + Safe Investigation SQL
-```
+### 1. Prerequisites
+- Python 3.11 or 3.12
+- AWS RDS PostgreSQL 15.16 instance (or local PostgreSQL with `pgvector`)
+- AWS credentials with Amazon Bedrock access
 
-### Deterministic Health Scoring Algorithm
-Before asking the LLM, the backend runs a mathematical scoring algorithm:
-- **Base Score:** 100
-- **Blocking Sessions Penalty:** -20 per blocking lock (max -40)
-- **Long-Running Queries (>5m):** -10 for first query, -3 per additional (max -25)
-- **Buffer Cache Hit Ratio:** -15 if <95%, -30 if <85%
-- **Connection Saturation:** -10 if >70% capacity, -20 if >85%
-- **XID Wraparound Risk:** -10 if >500M, -25 if >1B, -40 if >1.5B
-- **Severity Mapping:** `90–100: 🟢 HEALTHY` | `70–89: 🟠 WARNING` | `<70: 🔴 CRITICAL`
-
----
-
-## 7. Security & Credential Management
-
-All secrets and credentials are kept strictly in environment variables and are **never hardcoded or committed to GitHub**:
-
-1. [`.gitignore`](.gitignore) is pre-configured to exclude `.env`, `.venv`, credentials, and caches.
-2. [`.env.example`](.env.example) serves as the clean configuration template.
-3. Supports **AWS Secrets Manager** for dynamic password retrieval in production:
-   ```ini
-   USE_SECRETS_MANAGER=true
-   RDS_SECRET_NAME=postgres-dba-ai-secret
-   ```
-4. All database connections enforce TLS encryption (`sslmode=require`).
-
----
-
-## 8. Repository Structure
-
-```
-ai-postgres-dba/
-├── README.md                  # Comprehensive GitHub Documentation (You are here)
-├── requirements.txt          # Python dependencies (psycopg, boto3, pgvector, streamlit)
-├── .env.example              # Configuration template for credentials & models
-├── .gitignore                # Protects secrets, credentials, and virtualenvs
-├── app.py                    # Streamlit web dashboard with 7 diagnostic tabs
-├── config.py                 # Configuration loader & Secrets Manager handler
-├── init_db.py                # Database setup runner via Python (no psql required)
-├── test_connection.py        # RDS & extension connectivity diagnostic tool
-├── test_bedrock.py           # Bedrock Nova & Titan Embedding test script
-│
-├── db/                       # Database Access & Telemetry Layer
-│   ├── __init__.py
-│   ├── connection.py         # TLS connection factory with Secrets Manager
-│   ├── queries.py            # Diagnostic SQL queries catalog
-│   ├── health.py             # Telemetry collector & reliability scoring engine
-│   └── history.py            # Snapshot persistence & 7-day trend logger
-│
-├── monitoring/               # Specialized DBA Diagnostic Modules
-│   ├── __init__.py
-│   ├── storage.py            # Table/Index bloat & TOAST inspection
-│   ├── locks.py              # Recursive lock contention tree analyzer
-│   ├── vacuum.py             # Dead tuples & autovacuum tracker
-│   ├── xid.py                # Transaction ID wraparound risk calculator
-│   ├── replication.py        # Standby replica replay lag & WAL backlog
-│   └── cloudwatch.py         # RDS CloudWatch CPU/IOPS/Storage telemetry
-│
-├── ai/                       # Generative AI & Vector Search Engine
-│   ├── __init__.py
-│   ├── bedrock.py            # Bedrock Converse API client (Nova Lite / Claude)
-│   ├── embeddings.py         # Amazon Titan Text Embeddings V2 client
-│   ├── prompts.py            # Senior DBA system prompts & safety guardrails
-│   └── rag.py                # pgvector cosine similarity search (<=>) & RAG pipeline
-│
-├── sql/                      # SQL Schema & Reference Books
-│   ├── setup.sql             # Extensions, schema, tables, seed incidents, HNSW index
-│   ├── health_queries.sql    # Manual query reference guide for DBAs
-│   └── rag.sql               # pgvector similarity queries and testing scripts
-│
-└── docs/                     # Technical Guides
-    ├── architecture.md       # Architecture diagrams & component breakdown
-    ├── setup.md              # Detailed AWS RDS & Bedrock provisioning guide
-    └── troubleshooting.md    # Troubleshooting manual for connection/IAM issues
-```
-
----
-
-## 9. Step-by-Step Installation & Setup
-
-### Prerequisites
-- Python 3.11 or 3.12 installed
-- AWS Account with RDS PostgreSQL 15.16 and Amazon Bedrock access
-- AWS CLI configured (`aws configure`)
-
-### Step 1: Clone Repository & Create Virtual Environment
+### 2. Installation
 ```powershell
-# Clone the repository
-git clone https://github.com/your-username/ai-postgres-dba.git
-cd ai-postgres-dba
+# Clone repository
+git clone https://github.com/Krishnaale-AI/postgres-reliability-assistant.git
+cd postgres-reliability-assistant
 
-# Create virtual environment
+# Create & activate virtual environment
 py -3.12 -m venv .venv
-
-# Activate on Windows PowerShell:
-.\.venv\Scripts\Activate.ps1
-
-# Activate on Linux / macOS:
-# source .venv/bin/activate
+.\.venv\Scripts\Activate.ps1   # On Windows
+# source .venv/bin/activate    # On Linux/macOS
 
 # Install dependencies
 pip install -r requirements.txt
 ```
 
-### Step 2: Configure Environment Variables
-Copy the template to create your `.env` file:
+### 3. Configure Environment Variables
 ```powershell
 copy .env.example .env
 ```
-Edit `.env` with your actual AWS RDS credentials and Bedrock configuration:
+Edit [`.env`](.env) with your credentials:
 ```ini
 AWS_REGION=us-east-1
 
@@ -322,112 +257,67 @@ RDS_SSLMODE=require
 BEDROCK_MODEL_ID=amazon.nova-lite-v1:0
 BEDROCK_EMBEDDING_MODEL_ID=amazon.titan-embed-text-v2:0
 EMBEDDING_DIMENSION=1024
-
-# CloudWatch & Simulation
-ENABLE_CLOUDWATCH=true
-RDS_INSTANCE_IDENTIFIER=ai-postgres-dba
-DEMO_MODE=false
 ```
 
-### Step 3: Initialize Database Schema & pgvector Tables
-Run the initialization script using Python (no `psql` required):
+### 4. Initialize Database Schema
+Run the setup script using Python (no `psql` CLI required):
 ```powershell
 python init_db.py
 ```
-*(Or via `psql`: `psql -h YOUR_RDS_ENDPOINT -U postgres -d dba_ai -f sql/setup.sql`)*
 
-### Step 4: Run Diagnostic Verification
+### 5. Run Diagnostics
 ```powershell
-# Verify RDS connection, extensions, and catalog collectors
+# Test RDS database connectivity and extensions
 python test_connection.py
 
-# Verify Amazon Bedrock Nova Lite and Titan Embeddings
+# Test Amazon Bedrock Nova Lite and Titan Embeddings
 python test_bedrock.py
 ```
 
-### Step 5: Launch the Streamlit Dashboard
+### 6. Launch the Dashboard
 ```powershell
 streamlit run app.py
 ```
-Open your browser at **`http://localhost:8501`**.
+Open **`http://localhost:8501`** in your browser.
 
 ---
 
-## 10. Streamlit Dashboard Walkthrough
+## 🛡️ DBA Safety Guardrails
 
-The web application provides a 7-tab interface:
+The application is built with a **read-only safety philosophy**:
 
-| Tab | Name | Capabilities |
-| :---: | :--- | :--- |
-| **1** | **📊 Health Overview** | Real-time reliability gauge (0–100), severity badge, KPI cards, and 7-day database growth trend charts. |
-| **2** | **⚡ Performance & Locks** | Live recursive blocking tree (shows root blocking PID and uncommitted queries), slow queries (>10s), and top SQL execution times (`pg_stat_statements`). |
-| **3** | **📈 Storage & Bloat** | Top 10 largest tables, index overhead breakdown, dead tuple ratios, and autovacuum candidate identification. |
-| **4** | **☁️ CloudWatch RDS** | AWS CloudWatch infrastructure telemetry (CPU Utilization %, Free Storage GB, IOPS, Memory) and alarm recommendations. |
-| **5** | **🤖 Bedrock AI DBA** | One-click senior DBA analysis powered by Amazon Nova Lite: executive summaries, root-cause identification, and safe SQL investigation commands. |
-| **6** | **🧠 pgvector RAG Assistant** | Natural language DBA question answering using vector similarity matching against historical incident post-mortems. |
-| **7** | **🛡️ Safe DBA Runbook** | Copy-pasteable safe SQL commands for graceful backend cancellation, non-blocking re-indexing (`REINDEX CONCURRENTLY`), and timeout parameters. |
+> [!IMPORTANT]
+> The AI assistant **never executes mutating SQL automatically**. All remediation plans provide diagnostic commands for human review before execution.
 
----
-
-## 11. DBA Safety Guardrails & Operational Runbook
-
-The application enforces **strict read-only safety rules** for AI recommendations:
-
-```text
-               AI Analysis Engine
-                      │
-                      ▼
-         Safe Diagnostic Recommendation
-                      │
-                      ▼
-             DBA Human Reviews
-                      │
-                      ▼
-              DBA Executes SQL
-```
-
-### Safe SQL Cheat Sheet
 ```sql
--- 1. Gracefully cancel a query (allows clean rollback):
+-- Safe session cancellation (gives backend chance to roll back cleanly):
 SELECT pg_cancel_backend(14205);
 
--- 2. Terminate connection if cancel does not respond after 30s:
+-- Terminate session only if unresponsive after 30s:
 SELECT pg_terminate_backend(14205);
 
--- 3. Reclaim index space without locking table:
+-- Non-blocking index rebuild:
 REINDEX INDEX CONCURRENTLY idx_orders_customer_id;
 
--- 4. Prevent abandoned sessions in RDS Parameter Group:
+-- Enforce session timeout limits in Parameter Group:
 ALTER ROLE app_user SET idle_in_transaction_session_timeout = '60s';
 ALTER ROLE app_user SET statement_timeout = '30s';
 ```
 
 ---
 
-## 12. Troubleshooting Common Issues
+## 🔧 Troubleshooting Matrix
 
-| Error | Root Cause | Solution |
+| Issue | Cause | Solution |
 | :--- | :--- | :--- |
-| `[Errno 11001] getaddrinfo failed` | Using private internal hostname (`*.ec2.internal`) from outside AWS VPC. | Use the public RDS endpoint (`*.rds.amazonaws.com`) and ensure **Publicly Accessible = Yes** in RDS. |
-| `Connection timed out` | Security Group blocking port 5432. | Edit RDS Security Group inbound rules and allow **Type: PostgreSQL (5432)** from **My IP**. |
-| `extension "vector" is not available` | Unsupported minor version. | Ensure RDS engine is PostgreSQL 15.2 or later (such as 15.16). |
-| `AccessDeniedException` on Bedrock | IAM role missing permissions or model access not granted. | Enable **Amazon Nova Lite** in Bedrock Model Access console and attach `bedrock:Converse` IAM permission. |
-| `psql : The term is not recognized` | PostgreSQL client tools not in Windows PATH. | Run `python init_db.py` instead of `psql`. |
-
----
-
-## 13. Key Learnings & Skills Demonstrated
-
-- **PostgreSQL Internals**: Deep queries into system catalogs (`pg_stat_activity`, `pg_stat_database`, `pg_stat_statements`, `pg_statio_user_tables`).
-- **AWS Cloud Architecture**: RDS PostgreSQL 15.16, CloudWatch telemetry, Secrets Manager, VPC security groups, and IAM least-privilege policies.
-- **Generative AI & Prompt Engineering**: AWS Bedrock `Converse` API, senior DBA system instructions, safety guardrails, and structured output parsing.
-- **Vector Search & RAG**: `pgvector` extension, HNSW cosine distance indexing (`<=>`), and Amazon Titan Text Embeddings V2 integration.
-- **Production Python Development**: `psycopg` (v3) binary drivers, connection pooling, context managers, and Streamlit dashboard design.
-- **Site Reliability Engineering (SRE)**: Lock tree resolution, transaction ID wraparound prevention, table bloat remediation, and replica lag mitigation.
+| `[Errno 11001] getaddrinfo failed` | Using private internal DNS (`*.ec2.internal`) from outside AWS VPC. | Use the public RDS endpoint (`*.rds.amazonaws.com`) and ensure **Publicly Accessible = Yes**. |
+| `Connection timed out` | RDS Security Group blocking port 5432. | Add Inbound Rule for **Type: PostgreSQL (5432)** from **Source: My IP**. |
+| `extension "vector" is not available` | Unsupported minor version. | Ensure PostgreSQL engine version is 15.2 or later (such as 15.16). |
+| `AccessDeniedException` on Bedrock | IAM policy missing Bedrock permissions. | Enable **Amazon Nova Lite** in Bedrock Model Access and grant `bedrock:Converse`. |
+| Offline / No AWS access | Developing locally without active AWS. | Set `DEMO_MODE=true` in `.env` to explore all dashboard features with simulated cluster telemetry. |
 
 ---
 
 ## 📄 License
+
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-#   p o s t g r e s - r e l i a b i l i t y - a s s i s t a n t  
- 
